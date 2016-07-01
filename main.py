@@ -1,5 +1,5 @@
 # http://beneathdata.com/how-to/visualizing-my-location-history/
-import redis,json,csv,datetime
+import redis,json,csv,datetime,re
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import numpy as np
@@ -92,25 +92,28 @@ data_store = dict()
 data_store['lon'] = []
 data_store['lat'] = []
 data_store['hours'] = []
+data_store['county'] = []
 
 with open(stats_file,'rb') as csvfile:
-	data = csv.reader(csvfile)
-	for i,row in enumerate(data):
-		if len(row[0]) and i !=0:
-			date = row[0]
-			event = row[1]
-			location = json.loads(r.get(row[2]))
-			event_type = row[3].split(',')
-			hours = float(row[4])
-			data_store['lon'].append(location['lon'])
-			data_store['lat'].append(location['lat'])
-			data_store['hours'].append(hours)
-			# data_store['event_type'].append(event_type)
+    data = csv.reader(csvfile)
+    for i,row in enumerate(data):
+        if len(row[0]) and i !=0:
+            date = row[0]
+            event = row[1]
+            location = json.loads(r.get(row[2]))
+            event_type = row[3].split(',')
+            hours = float(row[4])
+            data_store['lon'].append(float(location['lon']))
+            data_store['lat'].append(float(location['lat']))
+            data_store['hours'].append(hours)
+            county = re.match(ur'.*County\s(\w+).*',location['address'])
+            if county != None:
+                county = county.group(1).strip()
+            data_store['county'].append(county )
 
 df = pd.DataFrame(data_store)
 df = df.dropna()
 
-df[['lon', 'lat','hours']] = df[['lon', 'lat','hours']].astype(float)
 
 df.reset_index(drop=True, inplace=True)
 
@@ -131,53 +134,48 @@ m = Basemap(
     resolution='i',  suppress_ticks=True)
 
 # m.drawcoastlines()
-m.readshapefile('data/counties/test','counties', color='none', zorder=2)
+m.readshapefile('data/counties/test','counties', drawbounds=False,color='none', zorder=2)
 
-print len(m.counties)
-for i in m.counties_info:
-	print i
-	break
-quit()
+plotted = []
+clean_counties = []
+clean_counties_info = []
+
+for info, shape in zip(m.counties_info, m.counties):
+    if info['NAME_TAG'] not in plotted:
+        clean_counties.append(shape)
+        clean_counties_info.append(info)
+        # x, y = zip(*shape) 
+        # m.plot(x, y, marker=None,color='#86A3A0')
+        plotted.append(info['NAME_TAG'])
 
 # # set up a map dataframe
 df_map = pd.DataFrame({
     #access the x,y coords and define a polygon for each item in m.countes
-    'poly': [Polygon(xy) for xy in m.counties],
+    'poly': [Polygon(xy) for xy in clean_counties],
     #convert NAME_1 to a column called 'district'
-    'county': [county['NAME_EN'] for county in m.counties_info]})
+    'county': [county['NAME_EN'] for county in clean_counties_info],
+    'hours': [sum(df.loc[lambda df: (df.county == county['NAME_TAG'])]['hours']) for county in clean_counties_info]
+})
 
 # Create Point objects in map coordinates from dataframe lon and lat values
 map_points = pd.Series([Point(m(mapped_x, mapped_y)) for mapped_x, mapped_y in zip(df['lon'], df['lat'])])
 rec_points = MultiPoint(list(map_points.values))
 counties_polygon = prep(MultiPolygon(list(df_map['poly'].values)))
-# calculate points that fall within the London boundary
 county_points = filter(counties_polygon.contains, rec_points)
 
-df_map['area_m'] = df_map['poly'].map(lambda x: x.area)
-df_map['area_km'] = df_map['area_m'] / 100000
-df_map['count'] = df_map['poly'].map(lambda x: int(len(filter(prep(x).contains, county_points))))
-df_map['density_m'] = df_map['count'] / df_map['area_m']
-df_map['density_km'] = df_map['count'] / df_map['area_km']
-# it's easier to work with NaN values when classifying
-df_map.replace(to_replace={'density_m': {0: np.nan}, 'density_km': {0: np.nan}}, inplace=True)
-
 # Calculate Jenks natural breaks for density
-breaks = nb(df_map[df_map['density_km'].notnull()].density_km.values,initial=50,k=5)
+breaks = nb(df_map[df_map['hours'].notnull()].hours.values,initial=300,k=32)
+
+print df
+print breaks
 
 # the notnull method lets us match indices when joining
-jb = pd.DataFrame({'jenks_bins': breaks.yb}, index=df_map[df_map['density_km'].notnull()].index)
+jb = pd.DataFrame({'jenks_bins': breaks.yb}, index=df_map[df_map['hours'].notnull()].index)
 df_map = df_map.join(jb)
 df_map.jenks_bins.fillna(-1, inplace=True)
 
-jenks_labels = ["<= %0.1f/km$^2$(%s counties)" % (b, c) for b, c in zip(breaks.bins, breaks.counts)]
-jenks_labels.insert(0, 'No field recording (%s counties)' % len(df_map[df_map['density_km'].isnull()]))
-
-# draw ward patches from polygons
-df_map['patches'] = df_map['poly'].map(lambda x: PolygonPatch(
-    x,
-    fc='#555555',
-    ec='#787878', lw=.25, alpha=.9,
-    zorder=4))
+# jenks_labels = ["<= %0.1f/km$^2$(%s counties)" % (b, c) for b, c in zip(breaks.bins, breaks.counts)]
+# jenks_labels.insert(0, 'No field recording (%s counties)' % len(df_map[df_map['density_km'].isnull()]))
 
 plt.clf()
 fig = plt.figure()
@@ -194,19 +192,19 @@ pc.set_facecolor(cmap(norm(df_map['jenks_bins'].values)))
 ax.add_collection(pc)
 
 # Add a colour bar
-cb = colorbar_index(ncolors=len(jenks_labels), cmap=cmap, shrink=0.5, labels=jenks_labels)
-cb.ax.tick_params(labelsize=6)
+# cb = colorbar_index(ncolors=len(jenks_labels), cmap=cmap, shrink=0.5, labels=jenks_labels)
+# cb.ax.tick_params(labelsize=6)
 
-# Show highest densities, in descending order
-highest = '\n'.join(value[1] for _, value in df_map[(df_map['jenks_bins'] == 5)][:10].sort().iterrows())
-highest = 'Most Dense Counties:\n\n' + highest
-# Subtraction is necessary for precise y coordinate alignment
-details = cb.ax.text(
-    -1., 0 - 0.007,
-    highest,
-    ha='right', va='bottom',
-    size=5,
-    color='#555555')
+# # Show highest densities, in descending order
+# highest = '\n'.join(value[1] for _, value in df_map[(df_map['jenks_bins'] == 10)][:10].sort().iterrows())
+# highest = 'Most Dense Counties:\n\n' + highest
+# # Subtraction is necessary for precise y coordinate alignment
+# details = cb.ax.text(
+#     -1., 0 - 0.007,
+#     highest,
+#     ha='right', va='bottom',
+#     size=5,
+#     color='#555555')
 
 # Bin method, copyright and source data info
 smallprint = ax.text(
