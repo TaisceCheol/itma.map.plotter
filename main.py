@@ -114,7 +114,6 @@ with open(stats_file,'rb') as csvfile:
 df = pd.DataFrame(data_store)
 df = df.dropna()
 
-
 df.reset_index(drop=True, inplace=True)
 
 shp = fiona.open('data/counties/test.shp')
@@ -133,8 +132,7 @@ m = Basemap(
     urcrnrlat=coords[3] + (extra * h),
     resolution='i',  suppress_ticks=True)
 
-# m.drawcoastlines()
-m.readshapefile('data/counties/test','counties', drawbounds=False,color='none', zorder=2)
+m.readshapefile('data/counties/test','counties',drawbounds=False,color='none', zorder=2)
 
 plotted = []
 clean_counties = []
@@ -164,25 +162,21 @@ counties_polygon = prep(MultiPolygon(list(df_map['poly'].values)))
 county_points = filter(counties_polygon.contains, rec_points)
 
 # Calculate Jenks natural breaks for density
-breaks = nb(df_map[df_map['hours'].notnull()].hours.values,initial=300,k=32)
-
-print df
-print breaks
-
+breaks = nb(
+    df_map[df_map['hours'].notnull()].hours.values,
+    initial=300,
+    k=5)
 # the notnull method lets us match indices when joining
 jb = pd.DataFrame({'jenks_bins': breaks.yb}, index=df_map[df_map['hours'].notnull()].index)
 df_map = df_map.join(jb)
 df_map.jenks_bins.fillna(-1, inplace=True)
-
-# jenks_labels = ["<= %0.1f/km$^2$(%s counties)" % (b, c) for b, c in zip(breaks.bins, breaks.counts)]
-# jenks_labels.insert(0, 'No field recording (%s counties)' % len(df_map[df_map['density_km'].isnull()]))
 
 plt.clf()
 fig = plt.figure()
 ax = fig.add_subplot(111, axisbg='w', frame_on=False)
 
 # use a blue colour ramp - we'll be converting it to a map using cmap()
-cmap = plt.get_cmap('Blues')
+cmap = plt.get_cmap('Greens')
 # draw wards with grey outlines
 df_map['patches'] = df_map['poly'].map(lambda x: PolygonPatch(x, ec='#555555', lw=.2, alpha=1., zorder=4))
 pc = PatchCollection(df_map['patches'], match_original=True)
@@ -191,41 +185,15 @@ norm = Normalize()
 pc.set_facecolor(cmap(norm(df_map['jenks_bins'].values)))
 ax.add_collection(pc)
 
-# Add a colour bar
-# cb = colorbar_index(ncolors=len(jenks_labels), cmap=cmap, shrink=0.5, labels=jenks_labels)
-# cb.ax.tick_params(labelsize=6)
+m.scatter(
+    [geom.x for geom in county_points],
+    [geom.y for geom in county_points],
+    5, marker='o', lw=.25,
+    facecolor='#33ccff', edgecolor='w',
+    alpha=0.9, antialiased=True,
+    label='Field Recording Locations', zorder=3)
 
-# # Show highest densities, in descending order
-# highest = '\n'.join(value[1] for _, value in df_map[(df_map['jenks_bins'] == 10)][:10].sort().iterrows())
-# highest = 'Most Dense Counties:\n\n' + highest
-# # Subtraction is necessary for precise y coordinate alignment
-# details = cb.ax.text(
-#     -1., 0 - 0.007,
-#     highest,
-#     ha='right', va='bottom',
-#     size=5,
-#     color='#555555')
-
-# Bin method, copyright and source data info
-smallprint = ax.text(
-    1.03, 0,
-    'Classification method: natural breaks\nContains Ordnance Survey data\n$\copyright$ Crown copyright and database right 2013\nPlaque data from http://openplaques.org',
-    ha='right', va='bottom',
-    size=4,
-    color='#555555',
-    transform=ax.transAxes)
-
-# Draw a map scale
-m.drawmapscale(
-    coords[0] + 0.025, coords[1] + 0.01,
-    coords[0], coords[1],
-    50.,
-    barstyle='fancy', labelstyle='simple',
-    fillcolor1='w', fillcolor2='#555555',
-    fontcolor='#555555',
-    zorder=5)
-plt.title("ITMA field recording locations, Ireland")
-plt.tight_layout()
+plt.title("ITMA field recording locations 2015/2016")
 # this will set the image width to 722px at 100dpi
 fig.set_size_inches(7.22, 5.25)
 plt.savefig('data/field_recording_locations.png', dpi=200, alpha=True)
