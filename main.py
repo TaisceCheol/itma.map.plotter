@@ -14,6 +14,7 @@ from descartes import PolygonPatch
 from pysal.esda.mapclassify import Natural_Breaks as nb
 # must be afer Basemap...?
 import fiona
+import matplotlib.image as image
 
 def locate_place(redis_instance,geolocator,place):
 		if place not in redis_instance.keys():
@@ -82,6 +83,27 @@ def cmap_discretize(cmap, N):
         cdict[key] = [(indices[i], colors_rgba[i - 1, ki], colors_rgba[i, ki]) for i in xrange(N + 1)]
     return LinearSegmentedColormap(cmap.name + "_%d" % N, cdict, 1024)
 
+def custom_colorbar(cmap, ncolors, labels, **kwargs):    
+    """Create a custom, discretized colorbar with correctly formatted/aligned labels.
+    
+    cmap: the matplotlib colormap object you plan on using for your graph
+    ncolors: (int) the number of discrete colors available
+    labels: the list of labels for the colorbar. Should be the same length as ncolors.
+    """
+    from matplotlib.colors import BoundaryNorm
+    from matplotlib.cm import ScalarMappable
+        
+    norm = BoundaryNorm(range(0, ncolors), cmap.N)
+    mappable = ScalarMappable(cmap=cmap, norm=norm)
+    mappable.set_array([])
+    mappable.set_clim(-0.5, ncolors+0.5)
+    colorbar = plt.colorbar(mappable, **kwargs)
+    colorbar.set_ticks(np.linspace(0, ncolors, ncolors+1)+0.5)
+    colorbar.set_ticklabels(range(0, ncolors))
+    colorbar.set_ticklabels(labels)
+    return colorbar
+
+
 r = redis.StrictRedis(host='localhost', port=6379, db=0)
 
 stats_file = 'data/field_recording_20152016.csv'
@@ -116,7 +138,7 @@ df = df.dropna()
 
 df.reset_index(drop=True, inplace=True)
 
-shp = fiona.open('data/counties/test.shp')
+shp = fiona.open('data/counties/counties.shp')
 coords = shp.bounds
 shp.close()
 w, h = coords[2] - coords[0], coords[3] - coords[1]
@@ -132,7 +154,7 @@ m = Basemap(
     urcrnrlat=coords[3] + (extra * h),
     resolution='i',  suppress_ticks=True)
 
-m.readshapefile('data/counties/test','counties',drawbounds=False,color='none', zorder=2)
+m.readshapefile('data/counties/counties','counties',drawbounds=False,color='none', zorder=2)
 
 plotted = []
 clean_counties = []
@@ -142,8 +164,6 @@ for info, shape in zip(m.counties_info, m.counties):
     if info['NAME_TAG'] not in plotted:
         clean_counties.append(shape)
         clean_counties_info.append(info)
-        # x, y = zip(*shape) 
-        # m.plot(x, y, marker=None,color='#86A3A0')
         plotted.append(info['NAME_TAG'])
 
 # # set up a map dataframe
@@ -165,18 +185,20 @@ county_points = filter(counties_polygon.contains, rec_points)
 breaks = nb(
     df_map[df_map['hours'].notnull()].hours.values,
     initial=300,
-    k=5)
+    k=6)
+
 # the notnull method lets us match indices when joining
 jb = pd.DataFrame({'jenks_bins': breaks.yb}, index=df_map[df_map['hours'].notnull()].index)
 df_map = df_map.join(jb)
 df_map.jenks_bins.fillna(-1, inplace=True)
 
+labels = ['No recording']+["> %d hours"%(perc) for perc in breaks.bins[:-1]]
+
 plt.clf()
 fig = plt.figure()
 ax = fig.add_subplot(111, axisbg='w', frame_on=False)
 
-# use a blue colour ramp - we'll be converting it to a map using cmap()
-cmap = plt.get_cmap('Greens')
+cmap = plt.get_cmap('Blues')
 # draw wards with grey outlines
 df_map['patches'] = df_map['poly'].map(lambda x: PolygonPatch(x, ec='#555555', lw=.2, alpha=1., zorder=4))
 pc = PatchCollection(df_map['patches'], match_original=True)
@@ -185,16 +207,19 @@ norm = Normalize()
 pc.set_facecolor(cmap(norm(df_map['jenks_bins'].values)))
 ax.add_collection(pc)
 
+# ncolors+1 because we're using a "zero-th" color
+cbar = custom_colorbar(cmap, ncolors=len(labels)+1, labels=labels, shrink=0.5)
+cbar.ax.tick_params(labelsize=16)
+
 m.scatter(
     [geom.x for geom in county_points],
     [geom.y for geom in county_points],
-    5, marker='o', lw=.25,
-    facecolor='#33ccff', edgecolor='w',
-    alpha=0.9, antialiased=True,
+    120,marker='o',lw=1.5,
+    facecolor='w',edgecolor='r',
+    alpha=1, antialiased=True,
     label='Field Recording Locations', zorder=3)
 
 plt.title("ITMA field recording locations 2015/2016")
-# this will set the image width to 722px at 100dpi
-fig.set_size_inches(7.22, 5.25)
-plt.savefig('data/field_recording_locations.png', dpi=200, alpha=True)
-plt.show()
+fig.set_size_inches(8.27, 11.69)
+plt.savefig('data/field_recording_locations.pdf', dpi=300,frameon=False, bbox_inches='tight', pad_inches=0.5, )
+# plt.show()
