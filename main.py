@@ -219,7 +219,7 @@ m.scatter(
     alpha=1, antialiased=True,
     label='Field Recording Locations', zorder=3)
 
-plt.title("ITMA field recording locations 2015/2016")
+# plt.title("ITMA field recording locations : July 2015 - June 2016",loc='left')
 fig.set_size_inches(8.27, 11.69)
 plt.savefig('data/field_recording_locations.pdf', dpi=300,frameon=False, bbox_inches='tight', pad_inches=0.5, )
 # plt.show()
